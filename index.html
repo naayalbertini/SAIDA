@@ -2388,6 +2388,7 @@ async function saveSignature(studentDocId, dataURL, signerName, clerkName) {
 
 let signaturePadInstance = null; // Instância global do SignaturePad
 let signaturePadFullscreenInstance = null; // Instância para tela cheia
+let signatureFSResizeHandler = null; // Handler para resize no modo tela cheia
 
 function undoSignaturePad(pad){
     if(!pad) return;
@@ -2398,12 +2399,30 @@ function undoSignaturePad(pad){
     }
 }
 
+// Em alguns tablets/celulares, o scroll do modal pode "roubar" o gesto do dedo.
+// Isso força o canvas a capturar o toque (sem travar o resto da página).
+function preventScrollOnCanvas(canvas){
+    if(!canvas) return;
+    const opts = { passive: false };
+    const stop = (e)=>{ try{ e.preventDefault(); } catch(_){} };
+    canvas.addEventListener('touchstart', stop, opts);
+    canvas.addEventListener('touchmove', stop, opts);
+    canvas.addEventListener('touchend', stop, opts);
+}
+
 /**
  * Ajusta o canvas da assinatura para ficar nítido em telas retina/tablet (devicePixelRatio)
  * e manter o tamanho visual definido no CSS.
  */
 function resizeSignatureCanvas(canvas, pad){
     if(!canvas) return;
+    // Preserva o desenho ao redimensionar (principalmente em tablet ao girar a tela)
+    // IMPORTANTÍSSIMO: SignaturePad perde o conteúdo quando o canvas muda de tamanho.
+    let prevData = null;
+    try {
+        if(pad && !pad.isEmpty()) prevData = pad.toData();
+    } catch(e) { prevData = null; }
+
     const ratio = Math.max(window.devicePixelRatio || 1, 1);
     const rect = canvas.getBoundingClientRect();
     // Define resolução interna do canvas
@@ -2411,9 +2430,14 @@ function resizeSignatureCanvas(canvas, pad){
     canvas.height = Math.round(rect.height * ratio);
     const ctx = canvas.getContext('2d');
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    // Se já havia assinatura desenhada e você quiser manter, dá pra usar toData()/fromData().
-    // Aqui, priorizamos estabilidade (canvas limpo ao redimensionar).
-    if(pad) pad.clear();
+
+    if(pad){
+        pad.clear();
+        // Restaura strokes anteriores após resize
+        if(prevData && prevData.length){
+            try { pad.fromData(prevData); } catch(e) { /* ignora */ }
+        }
+    }
 }
 
 
@@ -2663,6 +2687,7 @@ async function openStudent(studentDocId){
                     throttle: 8,
                     velocityFilterWeight: 0.7
                 });
+                preventScrollOnCanvas(canvas);
                 resizeSignatureCanvas(canvas, signaturePadInstance);
                 canvasControls.style.display = 'block';
                 $('signature-preview-container').style.display = 'none';
@@ -2702,6 +2727,7 @@ async function openStudent(studentDocId){
                 throttle: 8,
                 velocityFilterWeight: 0.7
             });
+            preventScrollOnCanvas(cFull);
             resizeSignatureCanvas(cFull, signaturePadFullscreenInstance);
 
             // Copia strokes do canvas pequeno (se houver)
@@ -2715,6 +2741,11 @@ async function openStudent(studentDocId){
             // Botões do fullscreen
             const closeFS = () => {
                 overlay.style.display = 'none';
+                // remove listener de resize do fullscreen
+                if(signatureFSResizeHandler){
+                    window.removeEventListener('resize', signatureFSResizeHandler);
+                    signatureFSResizeHandler = null;
+                }
             };
 
             if($('fsClose')) $('fsClose').onclick = closeFS;
@@ -2735,12 +2766,12 @@ async function openStudent(studentDocId){
             };
 
             // Ajusta ao rotacionar
-            const onResizeFS = () => {
+            signatureFSResizeHandler = () => {
                 if(overlay.style.display === 'block' && signaturePadFullscreenInstance){
                     resizeSignatureCanvas(cFull, signaturePadFullscreenInstance);
                 }
             };
-            window.addEventListener('resize', onResizeFS, { once: true });
+            window.addEventListener('resize', signatureFSResizeHandler);
         });
 
         // Salvar Assinatura
